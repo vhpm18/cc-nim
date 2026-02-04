@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     nvidia_nim_reasoning_effort: str = "high"
     nvidia_nim_include_reasoning: bool = True
 
+    # ==================== Whisper Config (Voice Transcription) ====================
+    whisper_model: str = "base"
+    whisper_device: str = "auto"
+    whisper_language: str = "auto"
+    audio_download_dir: str = "./audio_downloads"
+    cleanup_audio_files: bool = True
+
     # ==================== Bot Wrapper Config ====================
     telegram_bot_token: Optional[str] = None
     telegram_api_id: Optional[str] = None  # Deprecated
