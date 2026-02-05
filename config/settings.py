@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     audio_download_dir: str = "./audio_downloads"
     cleanup_audio_files: bool = True
 
+    # ==================== Voice Context Retention ====================
+    voice_context_window_minutes: int = 10  # Associate messages within this time window
+
     # ==================== Bot Wrapper Config ====================
     telegram_bot_token: Optional[str] = None
     telegram_api_id: Optional[str] = None  # Deprecated

@@ -94,6 +94,18 @@ async def lifespan(app: FastAPI):
                 session_store=session_store,
             )
 
+            # Initialize voice processor during startup
+            # This ensures Whisper model is loaded and any configuration errors are caught early
+            try:
+                await message_handler.initialize()
+            except Exception as e:
+                logger.error(f"Failed to initialize voice processor: {e}")
+                # Continue without voice support if initialization fails
+                # This makes voice optional - the app will work even if voice setup fails
+                import traceback
+                traceback.print_exc()
+
+
             # Restore tree state if available
             if session_store._trees:
                 logger.info(

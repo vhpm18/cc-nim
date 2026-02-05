@@ -10,12 +10,13 @@ from services.transcription import TranscriptionService
 @pytest.fixture
 def mock_whisper():
     """Mock Whisper module"""
-    with patch('services.transcription.whisper') as mock_whisper_mod:
+    with patch('services.transcription.WhisperModel') as mock_whisper_mod:
         mock_model_instance = MagicMock()
-        mock_model_instance.transcribe.return_value = {
-            'text': 'Hola mundo, esta es una prueba de transcripción'
-        }
-        mock_whisper_mod.load_model.return_value = mock_model_instance
+        mock_model_instance.transcribe.return_value = (
+            [MagicMock(text='Hola mundo, esta es una prueba de transcripción')],
+            MagicMock(language='es')
+        )
+        mock_whisper_mod.return_value = mock_model_instance
         yield mock_whisper_mod
 
 
@@ -41,8 +42,8 @@ async def test_transcribe_audio_file(
 
     # Assert
     assert result == expected_text
-    mock_whisper.load_model.assert_called_once_with("base", device="cpu")
-    mock_whisper.load_model.return_value.transcribe.assert_called_once()
+    mock_whisper.assert_called_once_with("base", device="cpu", compute_type="int8")
+    mock_whisper.return_value.transcribe.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -53,9 +54,10 @@ async def test_transcribe_spanish_audio(
     # Arrange
     test_audio = tmp_path / "test.mp3"
     test_audio.write_bytes(b"fake audio data")
-    mock_whisper.load_model.return_value.transcribe.return_value = {
-        'text': 'Buenos días, me gustaría saber sobre Python'
-    }
+    mock_whisper.return_value.transcribe.return_value = (
+        [MagicMock(text='Buenos días, me gustaría saber sobre Python')],
+        MagicMock(language='es')
+    )
 
     # Act
     result = await transcription_service.transcribe(
@@ -66,7 +68,7 @@ async def test_transcribe_spanish_audio(
     # Assert
     assert "Buenos días" in result
     # Verify language parameter was passed
-    mock_whisper.load_model.return_value.transcribe.assert_called_once()
+    mock_whisper.return_value.transcribe.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -86,9 +88,10 @@ async def test_transcribe_english_audio(
     test_audio = tmp_path / "test.mp3"
     test_audio.write_bytes(b"fake audio data")
     expected_text = "Hello world, this is a test transcription"
-    mock_whisper.load_model.return_value.transcribe.return_value = {
-        'text': expected_text
-    }
+    mock_whisper.return_value.transcribe.return_value = (
+        [MagicMock(text=expected_text)],
+        MagicMock(language='en')
+    )
 
     # Act
     result = await transcription_service.transcribe(

@@ -23,6 +23,7 @@ class IncomingMessage:
     reply_to_message_id: Optional[str] = None
     username: Optional[str] = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    voice_file_id: Optional[str] = None  # For voice messages (Telegram)
 
     # Platform-specific raw event for edge cases
     raw_event: Any = None

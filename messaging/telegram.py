@@ -91,6 +91,10 @@ class TelegramPlatform(MessagingPlatform):
         self._application.add_handler(
             MessageHandler(filters.TEXT & (~filters.COMMAND), self._on_telegram_message)
         )
+        # Voice messages - critical for audio transcription
+        self._application.add_handler(
+            MessageHandler(filters.VOICE, self._on_telegram_message)
+        )
         self._application.add_handler(CommandHandler("start", self._on_start_command))
         # Catch-all for other commands if needed, or let them fall through
         self._application.add_handler(
@@ -315,13 +319,18 @@ class TelegramPlatform(MessagingPlatform):
     async def _on_telegram_message(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Handle incoming updates."""
-        if (
-            not update.message
-            or not update.message.text
-            or not update.effective_user
-            or not update.effective_chat
-        ):
+        """Handle incoming messages (text and voice)."""
+        logger.debug("=" * 60)
+        logger.debug("📥 INGRESANDO A _on_telegram_message")
+        logger.debug(f"Update: {update}")
+
+        if not update.message:
+            logger.warning("❌ No hay mensaje en el update")
+            return
+
+        # Verificar que tenemos usuario y chat
+        if not update.effective_user or not update.effective_chat:
+            logger.warning("❌ No hay usuario o chat en el mensaje")
             return
 
         user_id = str(update.effective_user.id)
@@ -334,24 +343,46 @@ class TelegramPlatform(MessagingPlatform):
                 return
 
         if not self._message_handler:
+            logger.warning("❌ No hay message handler registrado")
             return
 
-        incoming = IncomingMessage(
-            text=update.message.text,
-            chat_id=chat_id,
-            user_id=user_id,
-            message_id=str(update.message.message_id),
-            platform="telegram",
-            reply_to_message_id=str(update.message.reply_to_message.message_id)
-            if update.message.reply_to_message
-            else None,
-            raw_event=update,
-        )
+        # Detectar si es mensaje de texto o voz
+        text = ""
+        voice_file_id = None
 
+        if update.message.text:
+            text = update.message.text
+            logger.info(f"✅ TEXTO recibido: '{text}'")
+
+        if update.message.voice:
+            voice_file_id = update.message.voice.file_id
+            logger.info(f"✅ VOZ detectada - file_id: {voice_file_id}")
+
+            # Note: Voice will be processed later by MessageHandler's VoiceProcessor
+            # We just capture the voice_file_id here and let the handler deal with transcription
+
+        # Crear IncomingMessage
         try:
+            incoming = IncomingMessage(
+                text=text,
+                voice_file_id=voice_file_id,
+                chat_id=chat_id,
+                user_id=user_id,
+                message_id=str(update.message.message_id),
+                platform="telegram",
+                reply_to_message_id=str(update.message.reply_to_message.message_id)
+                if update.message.reply_to_message
+                else None,
+                raw_event=update,
+            )
+
+            logger.info(f"📨 IncomingMessage creado - texto: '{text}' | voice_file_id: {voice_file_id}")
+
+            # Procesar a través del handler
             await self._message_handler(incoming)
+
         except Exception as e:
-            logger.error(f"Error handling message: {e}")
+            logger.error(f"❌ Error procesando mensaje: {e}", exc_info=True)
             try:
                 await self.send_message(
                     chat_id,

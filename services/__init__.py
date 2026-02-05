@@ -8,6 +8,6 @@ This package contains services for:
 """
 
 from .transcription import TranscriptionService
+from .telegram_audio import TelegramAudioDownloader
 
-__all__ = ['TranscriptionService']
-# TelegramAudioDownloader will be added in next task
+__all__ = ['TranscriptionService', 'TelegramAudioDownloader']

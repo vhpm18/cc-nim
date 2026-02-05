@@ -199,3 +199,83 @@ class MyPlatform(MessagingPlatform):
         # Handler expects an IncomingMessage object
         pass
 ```
+
+## Voice Message Features
+
+### Automatic Context Retention
+
+The bot now automatically maintains conversation context for consecutive voice messages! No need to use "Reply" every time.
+
+**How it works:**
+- When you send a voice (or text) message, the bot checks for recent activity in the same chat
+- If there's a completed message within the configured time window, the new message is automatically associated
+- Claude continues the conversation with full context of previous messages
+
+**Example Usage:**
+1. Send: "Hazme un reporte" (creates tree1)
+2. Send 30 secs later: "Dónde está mi reporte" (automatically continues tree1)
+3. Claude responds with context, knowing you're asking about the report
+
+**Configuration:**
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `VOICE_CONTEXT_WINDOW_MINUTES` | Time window for automatic context detection (0 = disabled) | `10` |
+
+Add to `.env`:
+```dotenv
+VOICE_CONTEXT_WINDOW_MINUTES=10  # Associate messages within 10 minutes
+```
+
+### Voice Message Transcription
+
+Send voice messages directly to the bot - they are automatically transcribed using Whisper (faster-whisper) and processed by Claude.
+
+**Setup:**
+```bash
+# Install audio processing dependencies (automatic with uv sync)
+# The service downloads the Whisper model on first use
+```
+
+**How it works:**
+1. Record and send a voice message to the bot
+2. Bot downloads the audio from Telegram
+3. Whisper transcribes the speech to text
+4. Claude processes the transcribed text
+5. Claude responds as if you typed the message
+
+**Audio formats supported:**
+- OGG (Opus) - Telegram's default format
+- MP3, WAV - Via conversion
+
+**Features:**
+- Multi-language transcription (auto-detects language)
+- Retry logic for network failures (3 attempts)
+- Graceful fallback if transcription fails
+- Preserves original voice message alongside transcription
+
+**Testing:**
+```bash
+# Test transcription only
+uv run python test_whisper.py
+
+# Run all voice-related tests
+uv run pytest tests/messaging/test_voice_processor.py tests/services/test_transcription.py -v
+```
+
+### Message Queue System
+
+The bot uses a tree-based queuing system:
+
+- **Tree structure**: Each conversation is a tree, messages are nodes
+- **Parent nodes**: Replies create child nodes (explicit or automatic)
+- **State tracking**: Each node has state (pending → in_progress → completed/error)
+- **Concurrent processing**: Multiple conversations can run simultaneously (max 10 sessions)
+
+**Message States:**
+- `PENDING` - Queued waiting for processing
+- `IN_PROGRESS` - Currently being processed by Claude
+- `COMPLETED` - Successfully completed with response
+- `ERROR` - Processing failed with error message
+
+When a parent task fails, all pending children are automatically cancelled with error propagation.

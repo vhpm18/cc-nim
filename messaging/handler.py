@@ -10,12 +10,14 @@ import time
 import asyncio
 import logging
 from typing import Optional, TYPE_CHECKING
+from datetime import datetime, timezone, timedelta
 
 from .base import MessagingPlatform, SessionManagerInterface
 from .models import IncomingMessage
 from .session import SessionStore
 from .tree_queue import TreeQueueManager, MessageNode, MessageState
 from .event_parser import parse_cli_event
+from .voice_processor import VoiceProcessor
 
 if TYPE_CHECKING:
     pass
@@ -44,6 +46,80 @@ class ClaudeMessageHandler:
         self.cli_manager = cli_manager
         self.session_store = session_store
         self.tree_queue = TreeQueueManager()
+
+        # Initialize voice processor with bot getter if platform supports it
+        def _get_telegram_bot():
+            """Extract bot instance from platform if it's Telegram."""
+            try:
+                # For TelegramPlatform, the bot is available
+                if hasattr(platform, '_application') and hasattr(platform._application, 'bot'):
+                    return platform._application.bot
+            except Exception:
+                pass
+            return None
+
+        self.voice_processor = VoiceProcessor(get_bot=_get_telegram_bot)
+
+    async def initialize(self) -> None:
+        """Initialize handler components. Called during application startup."""
+        try:
+            await self.voice_processor.initialize()
+            logger.info("Voice processor initialized successfully")
+        except Exception as e:
+            logger.warning(f"Voice processor unavailable: {e}")
+            # Voice is optional, so we continue without it
+
+    async def _find_recent_active_node(
+        self, chat_id: str, user_id: str, max_age_minutes: int = 10
+    ) -> Optional[MessageNode]:
+        """
+        Find the most recent active node from the same chat/user.
+
+        Args:
+            chat_id: The chat identifier
+            user_id: The user identifier
+            max_age_minutes: Maximum age in minutes to consider
+
+        Returns:
+            The most recent active MessageNode or None
+        """
+        from datetime import datetime, timezone
+
+        if max_age_minutes <= 0:
+            return None
+
+        cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+        most_recent: Optional[MessageNode] = None
+        most_recent_time: Optional[datetime] = None
+
+        # Iterate through all trees to find matching recent activity
+        for tree in self.tree_queue._trees.values():
+            # Check if this tree is for the same chat
+            root = tree.get_root()
+            if root.incoming.chat_id == chat_id:
+                # Check root node
+                if root.incoming.user_id == user_id:
+                    if root.completed_at and root.completed_at > cutoff_time:
+                        if not most_recent_time or root.completed_at > most_recent_time:
+                            most_recent = root
+                            most_recent_time = root.completed_at
+
+                # Check child nodes recursively
+                for node_id in root.children_ids:
+                    node = tree.get_node(node_id)
+                    if node and node.incoming.user_id == user_id:
+                        if node.completed_at and node.completed_at > cutoff_time:
+                            if not most_recent_time or node.completed_at > most_recent_time:
+                                most_recent = node
+                                most_recent_time = node.completed_at
+
+        if most_recent:
+            logger.info(
+                f"Found recent active node {most_recent.node_id} from "
+                f"{most_recent_time} for chat {chat_id}"
+            )
+
+        return most_recent
 
     async def handle_message(self, incoming: IncomingMessage) -> None:
         """
@@ -86,6 +162,31 @@ class ClaudeMessageHandler:
                         f"Reply to {incoming.reply_to_message_id} found tree but no valid parent node"
                     )
                     tree = None  # Treat as new conversation
+
+        # NEW: Check for recent activity if no explicit reply
+        if not parent_node_id and not tree and incoming.chat_id:
+            from config import settings
+            max_age = settings.voice_context_window_minutes
+
+            if max_age > 0:
+                logger.debug(
+                    f"No explicit reply found, checking recent activity for chat "
+                    f"{incoming.chat_id} (window: {max_age} minutes)"
+                )
+                recent_node = await self._find_recent_active_node(
+                    incoming.chat_id, incoming.user_id, max_age_minutes=max_age
+                )
+                if recent_node:
+                    parent_node_id = recent_node.node_id
+                    tree = self.tree_queue.get_tree_for_node(parent_node_id)
+                    if tree:
+                        logger.info(
+                            f"Found recent active node {parent_node_id} for chat "
+                            f"{incoming.chat_id}, continuing conversation"
+                        )
+                    else:
+                        logger.warning(f"Recent node {parent_node_id} found but no tree")
+                        parent_node_id = None
 
         # Generate node ID
         node_id = incoming.message_id
@@ -205,6 +306,43 @@ class ClaudeMessageHandler:
                 )
 
         try:
+            # Pre-process message (voice transcription if needed)
+            processed_incoming = incoming
+            try:
+                # Check if this is a voice message
+                if incoming.voice_file_id:
+                    logger.info(f"Voice message detected, processing transcription for node {node_id}")
+
+                    # Helper retry function
+                    async def _process_with_retry(max_attempts: int = 3):
+                        last_error = None
+                        for attempt in range(max_attempts):
+                            try:
+                                await update_ui("🎤 **Transcribing voice message...**", force=True)
+                                result = await self.voice_processor.process_message(incoming)
+                                logger.info(f"Voice transcription complete: {len(result.text)} chars")
+                                return result
+                            except Exception as e:
+                                last_error = e
+                                logger.warning(f"Voice processing attempt {attempt + 1}/{max_attempts} failed: {e}")
+                                if attempt < max_attempts - 1:
+                                    await asyncio.sleep(1 * (attempt + 1))
+                                else:
+                                    raise
+
+                    processed_incoming = await _process_with_retry()
+
+                    # Update UI with transcription preview
+                    preview = processed_incoming.text[:100] + "..." if len(processed_incoming.text) > 100 else processed_incoming.text
+                    await update_ui(f"🎤 **Transcribed:** {preview}", force=True)
+            except Exception as e:
+                logger.error(f"Voice transcription failed after retries: {e}", exc_info=True)
+                error_msg = f"Voice processing error: {str(e)[:100]}"
+                components["errors"].append(error_msg)
+                # Continue with original message on voice processing failure
+                processed_incoming = incoming
+                await update_ui("⚠️ **Voice processing failed, continuing...**", force=True)
+
             # Get or create CLI session
             try:
                 (
@@ -231,7 +369,7 @@ class ClaudeMessageHandler:
             logger.info(f"HANDLER: Starting CLI task processing for node {node_id}")
             event_count = 0
             async for event_data in cli_session.start_task(
-                incoming.text, session_id=captured_session_id
+                processed_incoming.text, session_id=captured_session_id
             ):
                 if not isinstance(event_data, dict):
                     logger.warning(

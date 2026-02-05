@@ -8,6 +8,7 @@ with automatic format conversion for Whisper compatibility.
 import os
 import tempfile
 import logging
+import hashlib
 from pathlib import Path
 from typing import Optional
 from telegram import Bot, File
@@ -65,11 +66,15 @@ class TelegramAudioDownloader:
         output_dir = output_dir or settings.audio_download_dir
         os.makedirs(output_dir, exist_ok=True)
 
+        # Sanitize file_id using SHA256 hash to prevent path traversal
+        # Use first 16 chars of hash for brevity
+        safe_name = hashlib.sha256(file_id.encode()).hexdigest()[:16]
+
         if filename is None:
-            filename = f"{file_id}.ogg"
+            filename = f"{safe_name}.ogg"
 
         output_path = Path(output_dir) / filename
-        logger.info(f"Downloading voice message: {file_id}")
+        logger.info(f"Downloading voice message: {file_id} -> {safe_name}")
 
         # Get file info from Telegram
         file: File = await self.bot.get_file(file_id)
